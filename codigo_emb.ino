@@ -17,12 +17,11 @@ CRGB leds[NUM_LEDS];
 #define LDR_PIN A0        // Pino analógico do sensor de luminosidade
 
 // ===== CONFIGURAÇÕES WiFi =====
-const char* WIFI_SSID = "SEU_WIFI_SSID";        // Altere para o SSID da sua rede
-const char* WIFI_PASSWORD = "SUA_SENHA_WIFI";   // Altere para a senha da sua rede
+const char* WIFI_SSID = "Apto404";        // Altere para o SSID da sua rede
+const char* WIFI_PASSWORD = "12345679";   // Altere para a senha da sua rede
 
 // ===== CONFIGURAÇÕES DO BACKEND =====
-const char* API_BASE_URL = "http://vps.ufsc.br";  // URL do backend sem porta (Nginx cuida disso)
-
+const char* API_BASE_URL = "http://embarcados.pedro.heuser.vms.ufsc.br";
 // ===== CONSTANTES DE MODOS =====
 #define MODO_AUTO 0
 #define MODO_MANUAL 1

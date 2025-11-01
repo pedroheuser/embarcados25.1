@@ -124,9 +124,19 @@ USE_I18N = True
 
 USE_TZ = True
 
+
+# Static files (CSS, JavaScript, Images)
+# https://docs.djangoproject.com/en/5.0/howto/static-files/
+
+STATIC_URL = 'static/'
+
+# --- MUDANÇAS DE PRODUÇÃO (Conforme Guia) ---
+
 # Permite que o App React Native e o Wemos acessem a API
 CORS_ORIGIN_ALLOW_ALL = True
 
+# Local onde o 'collectstatic' vai jogar os arquivos para o Nginx
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 # Configurações de segurança
 SECURE_BROWSER_XSS_FILTER = True

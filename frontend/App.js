@@ -2,9 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { Button, SafeAreaView, StatusBar, StyleSheet, Text, View } from 'react-native';
 import axios from 'axios';
 
-// Defina o IP do seu VPS da UFSC aqui
-// IMPORTANTE: Em desenvolvimento, se o backend rodar no seu PC, use o IP da sua máquina na rede (ex: 192.168.1.10), não 'localhost'.
-const API_URL = 'http://<IP_DO_VPS_UFSC>:8000/api';
+// Defina o IP/URL do seu VPS da UFSC aqui (sem porta, o Nginx cuida disso)
+// IMPORTANTE: Em desenvolvimento, se o backend rodar no seu PC, use o IP da sua máquina na rede (ex: http://192.168.1.10), não 'localhost'.
+const API_URL = 'http://<IP_DO_VPS_UFSC>/api';
 
 const App = () => {
   // 'state' é necessário para apps dinâmicos [cite: 10, 82]
@@ -74,6 +74,20 @@ const App = () => {
           title="Desligar"
           onPress={() => sendControleManual({ r: 0, g: 0, b: 0 })}
           color="#7f8c8d"
+        />
+        <Button
+          title="Modo Automático"
+          onPress={async () => {
+            try {
+              await axios.post(`${API_URL}/controle/`, {
+                modo: 'auto',
+              });
+              console.log('Modo automático ativado');
+            } catch (error) {
+              console.error('Erro ao ativar modo automático:', error);
+            }
+          }}
+          color="#27ae60"
         />
       </View>
     </SafeAreaView>

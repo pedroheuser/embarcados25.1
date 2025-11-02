@@ -21,7 +21,7 @@ const char* WIFI_SSID = "Apto404";        // Altere para o SSID da sua rede
 const char* WIFI_PASSWORD = "12345679";   // Altere para a senha da sua rede
 
 // ===== CONFIGURAÇÕES DO BACKEND =====
-const char* API_BASE_URL = "http://embarcados.pedro.heuser.vms.ufsc.br";
+const char* API_BASE_URL = "http://150.162.244.124";
 // ===== CONSTANTES DE MODOS =====
 #define MODO_AUTO 0
 #define MODO_MANUAL 1

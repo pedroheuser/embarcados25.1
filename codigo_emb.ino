@@ -17,8 +17,8 @@ CRGB leds[NUM_LEDS];
 #define LDR_PIN A0        // Pino analógico do sensor de luminosidade
 
 // ===== CONFIGURAÇÕES WiFi =====
-const char* WIFI_SSID = "Apto404";        // Altere para o SSID da sua rede
-const char* WIFI_PASSWORD = "12345679";   // Altere para a senha da sua rede
+const char* WIFI_SSID = "MotoG";        // Altere para o SSID da sua rede
+const char* WIFI_PASSWORD = "12345678";   // Altere para a senha da sua rede
 
 // ===== CONFIGURAÇÕES DO BACKEND =====
 const char* API_BASE_URL = "http://150.162.244.124";
@@ -43,8 +43,14 @@ unsigned long ultimoComandoVerificado = 0;
 const unsigned long INTERVALO_ENVIAR_LEITURA = 5000;   // 5 segundos
 const unsigned long INTERVALO_VERIFICAR_COMANDO = 2000; // 2 segundos
 
-// Objeto WiFiClient para requisições HTTP
-WiFiClient client;
+// Timeouts para requisições HTTP (em milissegundos)
+const int HTTP_CONNECT_TIMEOUT = 15000;  // 15 segundos para conectar
+const int HTTP_READ_TIMEOUT = 10000;     // 10 segundos para ler resposta
+const int HTTP_TOTAL_TIMEOUT = HTTP_CONNECT_TIMEOUT + HTTP_READ_TIMEOUT;  // Timeout total
+
+// Contador de tentativas de envio
+int tentativasEnvio = 0;
+const int MAX_TENTATIVAS = 3;
 
 void setup() {
   Serial.begin(115200);
@@ -161,34 +167,210 @@ void connectWiFi() {
 
 void sendLuminosidadeToAPI(int valor, String modo) {
   if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("✗ WiFi não conectado. Não é possível enviar dados.");
     return;
   }
   
-  HTTPClient http;
   String url = String(API_BASE_URL) + "/api/luminosidade/";
   
-  http.begin(client, url);
-  http.addHeader("Content-Type", "application/json");
+  Serial.print("Enviando para: ");
+  Serial.println(url);
   
-  // Criar JSON
-  DynamicJsonDocument doc(1024);
+  // Criar JSON uma única vez (reduzido para economizar memória)
+  DynamicJsonDocument doc(256);
   doc["valor"] = valor;
   doc["modo"] = modo;
   
   String jsonString;
   serializeJson(doc, jsonString);
   
-  int httpResponseCode = http.POST(jsonString);
+  Serial.print("JSON enviado: ");
+  Serial.println(jsonString);
   
-  if (httpResponseCode > 0) {
-    Serial.print("✓ Leitura enviada: HTTP ");
-    Serial.println(httpResponseCode);
-  } else {
-    Serial.print("✗ Erro ao enviar leitura: ");
-    Serial.println(httpResponseCode);
+  // Tentar enviar com retry - cada tentativa cria novos objetos
+  int httpResponseCode = -1;
+  int tentativa = 0;
+  bool sucesso = false;
+  
+  while (tentativa < MAX_TENTATIVAS && !sucesso) {
+    tentativa++;
+    Serial.print("Tentativa ");
+    Serial.print(tentativa);
+    Serial.print("/");
+    Serial.print(MAX_TENTATIVAS);
+    Serial.println("...");
+    
+    // Verificar WiFi antes de cada tentativa
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("✗ WiFi desconectado durante envio. Abortando...");
+      break;
+    }
+    
+    // Criar novos objetos para cada tentativa (evita problemas de estado)
+    WiFiClient client;
+    client.setTimeout((HTTP_READ_TIMEOUT / 1000) + 2); // setTimeout recebe segundos
+    
+    HTTPClient http;
+    
+    // Configurar HTTPClient com timeouts corretos
+    // http.setTimeout() recebe milissegundos e é o timeout TOTAL (conexão + leitura)
+    if (!http.begin(client, url)) {
+      Serial.println("✗ Erro ao iniciar conexão HTTP");
+      http.end();
+      client.stop();
+      delay(500);
+      continue;
+    }
+    
+    http.setTimeout(HTTP_TOTAL_TIMEOUT);
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("Connection", "close");
+    http.setReuse(false); // Não reutilizar conexão
+    
+    // Enviar POST
+    httpResponseCode = http.POST(jsonString);
+    
+    if (httpResponseCode > 0) {
+      Serial.print("✓ Resposta recebida: HTTP ");
+      Serial.println(httpResponseCode);
+      
+      // Verificar se foi sucesso
+      if (httpResponseCode == 200 || httpResponseCode == 201) {
+        // Para sucesso, a leitura da resposta é opcional
+        // Tentar ler apenas se houver dados disponíveis rapidamente
+        // Para evitar timeout, usar uma leitura não bloqueante
+        WiFiClient* stream = http.getStreamPtr();
+        if (stream && stream->available()) {
+          // Ler resposta com limite de tempo e tamanho
+          String response = "";
+          unsigned long readStart = millis();
+          const int MAX_READ_TIME = 2000; // Máximo 2 segundos para ler
+          const int MAX_RESPONSE_LENGTH = 256;
+          
+          while (stream->available() && response.length() < MAX_RESPONSE_LENGTH && 
+                 (millis() - readStart) < MAX_READ_TIME) {
+            int c = stream->read();
+            if (c >= 0) {
+              response += (char)c;
+            } else {
+              break;
+            }
+          }
+          
+          if (response.length() > 0) {
+            Serial.print("Resposta: ");
+            Serial.println(response);
+          }
+        } else {
+          // Se não houver stream disponível, não é problema
+          // O importante é que o código HTTP foi 200/201
+          Serial.println("(Resposta vazia ou não disponível - OK)");
+        }
+        
+        sucesso = true;
+        tentativasEnvio = 0; // Reset contador de falhas
+        Serial.println("✓ Leitura enviada com sucesso!");
+      } else {
+        // Erro HTTP do servidor (400, 404, 500, etc.)
+        Serial.print("✗ Erro do servidor: HTTP ");
+        Serial.println(httpResponseCode);
+        
+        // Tentar ler resposta de erro (com timeout curto)
+        WiFiClient* stream = http.getStreamPtr();
+        if (stream && stream->available()) {
+          String response = "";
+          unsigned long errorStartTime = millis();
+          const int MAX_ERROR_READ_TIME = 2000;
+          const int MAX_ERROR_LENGTH = 200;
+          
+          while (stream->available() && response.length() < MAX_ERROR_LENGTH && 
+                 (millis() - errorStartTime) < MAX_ERROR_READ_TIME) {
+            int c = stream->read();
+            if (c >= 0) {
+              response += (char)c;
+            } else {
+              break;
+            }
+          }
+          
+          if (response.length() > 0) {
+            Serial.print("Detalhes do erro: ");
+            Serial.println(response);
+          }
+        }
+        
+        // Para erros 4xx, não faz sentido tentar novamente imediatamente
+        // (problema nos dados enviados)
+        if (httpResponseCode >= 400 && httpResponseCode < 500) {
+          Serial.println("⚠ Erro do cliente (4xx). Verifique os dados enviados.");
+          break; // Não tenta novamente para erros 4xx
+        }
+      }
+    } else {
+      // Erro de conexão (código negativo)
+      Serial.print("✗ Erro de conexão: ");
+      Serial.print(httpResponseCode);
+      
+      // Códigos de erro comuns do HTTPClient (valores negativos)
+      // -1: Connection refused
+      // -2: Send header failed
+      // -3: Send payload failed
+      // -4: Not connected
+      // -5: Connection lost
+      // -6: No stream
+      // -7: No HTTP server
+      // -11: Read timeout
+      // -12: Payload read failed
+      if (httpResponseCode == -1 || httpResponseCode == -4) {
+        Serial.println(" → Servidor recusou conexão ou não conectado");
+        Serial.println("  Verifique se o servidor está online e a URL está correta");
+      } else if (httpResponseCode == -5) {
+        Serial.println(" → Conexão perdida durante requisição");
+      } else if (httpResponseCode == -7) {
+        Serial.println(" → Servidor HTTP não encontrado (URL incorreta?)");
+        Serial.print("  URL testada: ");
+        Serial.println(url);
+      } else if (httpResponseCode == -11) {
+        Serial.println(" → Timeout na leitura da resposta");
+        Serial.println("  Servidor pode estar lento ou sobrecarregado");
+      } else if (httpResponseCode == -2 || httpResponseCode == -3) {
+        Serial.println(" → Erro ao enviar dados (header ou payload)");
+        Serial.println("  Verifique conexão WiFi e tamanho dos dados");
+      } else {
+        Serial.println(" → Erro desconhecido de conexão");
+        Serial.print("  Código: ");
+        Serial.println(httpResponseCode);
+        Serial.println("  Verifique WiFi, servidor e URL");
+      }
+    }
+    
+    // Fechar conexões após cada tentativa
+    http.end();
+    client.stop();
+    
+    // Se não teve sucesso e ainda há tentativas, aguardar antes de tentar novamente
+    if (!sucesso && tentativa < MAX_TENTATIVAS) {
+      Serial.println("Aguardando 1 segundo antes de tentar novamente...");
+      delay(1000);
+    }
   }
   
-  http.end();
+  if (!sucesso) {
+    tentativasEnvio++;
+    Serial.print("✗ Falha após ");
+    Serial.print(MAX_TENTATIVAS);
+    Serial.println(" tentativas");
+    
+    // Se houver muitas falhas consecutivas, verificar WiFi
+    if (tentativasEnvio >= 5) {
+      Serial.println("⚠ Muitas falhas consecutivas. Verificando WiFi...");
+      if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("WiFi desconectado! Tentando reconectar...");
+        connectWiFi();
+      }
+      tentativasEnvio = 0;
+    }
+  }
 }
 
 void checkManualCommand() {
@@ -196,17 +378,25 @@ void checkManualCommand() {
     return;
   }
   
+  // Criar WiFiClient com timeouts
+  WiFiClient client;
+  client.setTimeout(HTTP_READ_TIMEOUT / 1000);
+  
   HTTPClient http;
   String url = String(API_BASE_URL) + "/api/controle/";
   
+  // Configurar timeouts
   http.begin(client, url);
+  http.setTimeout(HTTP_CONNECT_TIMEOUT);
+  http.addHeader("Connection", "close");
+  
   int httpResponseCode = http.GET();
   
-  if (httpResponseCode == HTTP_CODE_OK) {
+  if (httpResponseCode == 200) {
     String response = http.getString();
     
     // Parse JSON da resposta
-    DynamicJsonDocument doc(1024);
+    DynamicJsonDocument doc(512);
     DeserializationError error = deserializeJson(doc, response);
     
     if (!error) {
@@ -235,13 +425,20 @@ void checkManualCommand() {
           }
         }
       }
+    } else {
+      Serial.print("✗ Erro ao parsear JSON do controle: ");
+      Serial.println(error.c_str());
     }
+  } else if (httpResponseCode > 0) {
+    // Erro HTTP do servidor (não é crítico para esta função)
+    // Não imprimir para não poluir o Serial Monitor
   } else {
-    // Se não houver comando ou erro, manter modo atual
-    // (não faz nada, permite timeout natural)
+    // Erro de conexão (código negativo) - apenas em modo debug
+    // Não imprimir para não poluir o Serial Monitor
   }
   
   http.end();
+  client.stop();
 }
 
 // ===== FUNÇÕES DE CONTROLE DE LEDs =====

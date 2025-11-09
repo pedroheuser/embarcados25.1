@@ -165,6 +165,51 @@ void connectWiFi() {
 
 // ===== FUNÇÕES DE COMUNICAÇÃO COM BACKEND =====
 
+// Função auxiliar para testar conectividade com o servidor
+bool testServerConnection() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("✗ WiFi não conectado. Não é possível testar servidor.");
+    return false;
+  }
+  
+  Serial.println("Testando conectividade com o servidor...");
+  
+  WiFiClient client;
+  client.setTimeout(5); // 5 segundos timeout
+  
+  // Extrair host e porta da URL
+  String host = String(API_BASE_URL);
+  host.replace("http://", "");
+  host.replace("https://", "");
+  
+  int port = 80;
+  int colonIndex = host.indexOf(':');
+  if (colonIndex > 0) {
+    port = host.substring(colonIndex + 1).toInt();
+    host = host.substring(0, colonIndex);
+  }
+  
+  Serial.print("Tentando conectar ao servidor: ");
+  Serial.print(host);
+  Serial.print(":");
+  Serial.println(port);
+  
+  if (client.connect(host.c_str(), port)) {
+    Serial.println("✓ Conexão TCP estabelecida com sucesso!");
+    client.stop();
+    return true;
+  } else {
+    Serial.println("✗ Falha ao estabelecer conexão TCP");
+    Serial.println("  Possíveis causas:");
+    Serial.println("  - Servidor não está online");
+    Serial.println("  - Firewall bloqueando porta 80");
+    Serial.println("  - Servidor não está escutando na interface externa");
+    Serial.println("  - Problema de rede/routing");
+    client.stop();
+    return false;
+  }
+}
+
 void sendLuminosidadeToAPI(int valor, String modo) {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("✗ WiFi não conectado. Não é possível enviar dados.");
@@ -186,6 +231,27 @@ void sendLuminosidadeToAPI(int valor, String modo) {
   
   Serial.print("JSON enviado: ");
   Serial.println(jsonString);
+  
+  // Testar conectividade básica antes de tentar enviar (apenas na primeira vez após falhas)
+  static unsigned long lastConnectionTest = 0;
+  static bool lastConnectionTestResult = false;
+  const unsigned long CONNECTION_TEST_INTERVAL = 30000; // Testar a cada 30 segundos
+  
+  unsigned long now = millis();
+  if (tentativasEnvio > 0 && (now - lastConnectionTest) > CONNECTION_TEST_INTERVAL) {
+    Serial.println("\n[DIAGNÓSTICO] Testando conectividade com servidor...");
+    lastConnectionTestResult = testServerConnection();
+    lastConnectionTest = now;
+    
+    if (!lastConnectionTestResult && tentativasEnvio >= 3) {
+      Serial.println("⚠ Servidor inacessível. Verifique:");
+      Serial.println("  1. Servidor está online?");
+      Serial.println("  2. Nginx está rodando? (sudo systemctl status nginx)");
+      Serial.println("  3. Porta 80 está aberta? (sudo ss -tlnp | grep :80)");
+      Serial.println("  4. Firewall está bloqueando? (sudo ufw status)");
+      Serial.println("  5. Teste manual: curl http://150.162.244.124/api/status/");
+    }
+  }
   
   // Tentar enviar com retry - cada tentativa cria novos objetos
   int httpResponseCode = -1;
@@ -323,7 +389,15 @@ void sendLuminosidadeToAPI(int valor, String modo) {
       // -12: Payload read failed
       if (httpResponseCode == -1 || httpResponseCode == -4) {
         Serial.println(" → Servidor recusou conexão ou não conectado");
-        Serial.println("  Verifique se o servidor está online e a URL está correta");
+        Serial.println("  DIAGNÓSTICO:");
+        Serial.println("  1. Verifique se o servidor está online");
+        Serial.println("  2. Verifique se Nginx está rodando: sudo systemctl status nginx");
+        Serial.println("  3. Verifique se a porta 80 está escutando: sudo ss -tlnp | grep :80");
+        Serial.println("  4. Verifique firewall: sudo ufw status");
+        Serial.println("  5. Teste manual no servidor: curl http://localhost/api/status/");
+        Serial.println("  6. Teste externo: curl http://150.162.244.124/api/status/");
+        Serial.print("  URL testada: ");
+        Serial.println(url);
       } else if (httpResponseCode == -5) {
         Serial.println(" → Conexão perdida durante requisição");
       } else if (httpResponseCode == -7) {
